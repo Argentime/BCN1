@@ -29,4 +29,4 @@ bool send_string_as_frame(HANDLE hComm,
     uint8_t control, 
     uint8_t variant);
 bool receive_frame(HANDLE hComm);
-void print_frame_info(const FrameInfo& frame);
+void print_frame_info(const std::vector<uint8_t>& raw_frame);
