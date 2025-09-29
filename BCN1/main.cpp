@@ -9,6 +9,8 @@
 #include <locale.h>
 #include <stdbool.h>
 #include <limits>
+#include <sstream>
+#include <iomanip>
 
 HANDLE hComm1;
 HANDLE hComm2;
@@ -239,16 +241,26 @@ bool receive_frame(HANDLE hComm) {
     return !full_message.empty();
 }
 
-// просмотр кадров
-void print_frame_info(const FrameInfo& frame) {
-    std::cout << "Адрес: " << (int)frame.address
-        << " | Управление: " << (int)frame.control
-        << " | Счётчик: " << (int)frame.sequence
-        << " | Вариант: " << (int)frame.variant << "\n";
-    std::cout << "Данные (" << frame.payload.size() << " байт): ";
-    for (uint8_t b : frame.payload) std::cout << (char)b;
+std::string to_hex_string(uint8_t value) {
+    std::ostringstream oss;
+    oss << "0x"
+        << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+        << static_cast<int>(value);
+    return oss.str();
+}
+
+// Печать кадра в двух видах
+void print_frame_info(const std::vector<uint8_t>& raw_frame) {
+    // Первая строка — логическая структура кадра
+    std::cout << "| Флаг | Адрес | Управление | Счётчик | Вариант | Данные | Флаг |\n";
+
+    // Вторая строка — байты кадра
+    for (uint8_t b : raw_frame) {
+        std::cout << std::setw(6) << to_hex_string(b);
+    }
     std::cout << "\n";
 }
+
 
 DWORD select_baud_rate() {
     int choice;
@@ -286,7 +298,7 @@ int main() {
     std::string message;
     int choice = -1;
     uint8_t seq = 0;
-    uint8_t variant = 0x02; // номер варианта по списку (флаг)
+    uint8_t variant = 0x04;
 
     while (true) {
         std::cout << "\nМеню:\n";
@@ -317,11 +329,11 @@ int main() {
             break;
         case 4:
             std::cout << "Последний отправленный кадр:\n";
-            print_frame_info(last_sent_frame);
+            print_frame_info(last_sent_frame.raw_frame);
             break;
         case 5:
             std::cout << "Последний принятый кадр:\n";
-            print_frame_info(last_received_frame);
+            print_frame_info(last_received_frame.raw_frame);
             break;
         case 0:
             CloseHandle(hComm1);
