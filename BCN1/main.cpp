@@ -251,14 +251,19 @@ std::string to_hex_string(uint8_t value) {
 
 // Печать кадра в двух видах
 void print_frame_info(const std::vector<uint8_t>& raw_frame) {
-    // Первая строка — логическая структура кадра
-    std::cout << "| Флаг | Адрес | Управление | Счётчик | Вариант | Данные | Флаг |\n";
+    std::cout << "Флаг: " << to_hex_string(raw_frame[0]) << "\n";
+    std::cout << "Адрес: " << to_hex_string(raw_frame[1]) << "\n";
+    std::cout << "Управление: " << to_hex_string(raw_frame[2]) << "\n";
+    std::cout << "Счётчик: " << to_hex_string(raw_frame[3]) << "\n";
+    std::cout << "Вариант: " << to_hex_string(raw_frame[4]) << "\n";
 
-    // Вторая строка — байты кадра
-    for (uint8_t b : raw_frame) {
-        std::cout << std::setw(6) << to_hex_string(b);
+    std::cout << "Данные (" << (raw_frame.size() - 6) << " байт): ";
+    for (int i = 5; i < raw_frame.size()-1; i++) {
+        std::cout << to_hex_string(raw_frame[i]) << " ";
     }
-    std::cout << "\n";
+    std::cout << std::endl;
+    std::cout << "Флаг: " << to_hex_string(raw_frame[raw_frame.size()-1]) << "\n";
+    std::cout << std::endl;
 }
 
 
