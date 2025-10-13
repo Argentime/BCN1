@@ -1,7 +1,20 @@
 #pragma once
 #include <vector>
-int compute_hamming_m(size_t k_bits);
-std::vector<uint8_t> build_fcs_from_payload(const std::vector<uint8_t>& payload);
-std::vector<int> unpack_fcs_bits(const std::vector<uint8_t>& fcs_bytes, int expected_bits_count);
-std::pair<uint64_t, int> compute_syndrome_and_parity(const std::vector<uint8_t>& payload, const std::vector<int>& received_fcs_bits);
-std::pair<std::vector<uint8_t>, int> hamming_check_and_correct(std::vector<uint8_t> payload, const std::vector<uint8_t>& fcs_bytes);
+
+enum class HammingStatus { OK = 0, CORRECTED = 1, DOUBLE_ERROR = 2 };
+
+struct HammingResult {
+    uint8_t nibble; // decoded 4 bits in low nibble
+    HammingStatus status;
+};
+
+struct DecodeResult {
+    std::vector<uint8_t> decoded;
+    bool had_single_error;
+    bool had_double_error;
+};
+
+uint8_t hamming_encode_nibble(uint8_t nibble4);
+HammingResult hamming_decode_byte(uint8_t code);
+std::vector<uint8_t> hamming_encode_payload(const std::vector<uint8_t>& payload);
+DecodeResult hamming_decode_payload(const std::vector<uint8_t>& encoded, size_t orig_length);

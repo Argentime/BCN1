@@ -1,141 +1,113 @@
 #include <vector>
-#include "hamming.h"
+#include <iostream>
 #include <random>
-#include <wtypes.h>
-#include "com_config.h"
 #include "frame_config.h"
+#include "hamming.h"
+#include "com_config.h"
+#include "io.h"
 
+void distort_encoded_payload(std::vector<uint8_t>& encoded_payload, std::mt19937& rng) {
+    if (encoded_payload.empty()) return;
+    std::uniform_real_distribution<double> prob(0.0, 1.0);
+    double p = prob(rng);
+    int bits_to_flip = (p < 0.75) ? 1 : 2; // 75% -> 1, 25% -> 2
 
-bool split_info_into_payload_and_fcs(const std::vector<uint8_t>& info, std::vector<uint8_t>& payload_out, std::vector<uint8_t>& fcs_out) {
-    // info = [addr(1), ctrl(1), seq(1), variant(1), payload (P bytes), fcs (F bytes)]
-    if (info.size() < 4) return false;
-    size_t L = info.size();
-    size_t header = 4;
-    // try all possible payload lengths P from 0..L-header
-    for (size_t P = 0; P <= L - header; ++P) {
-        size_t k_bits = P * 8;
-        int m = compute_hamming_m(k_bits);
-        size_t fcs_bits = (size_t)m + 1;
-        size_t fcs_bytes_needed = (fcs_bits + 7) / 8;
-        if (header + P + fcs_bytes_needed == L) {
-            // match found
-            payload_out.assign(info.begin() + header, info.begin() + header + P);
-            fcs_out.assign(info.begin() + header + P, info.end());
-            return true;
-        }
-    }
-    // if none matched - treat as no FCS (fallback: all is payload)
-    payload_out.assign(info.begin() + header, info.end());
-    fcs_out.clear();
-    return true;
-}
+    std::uniform_int_distribution<size_t> idx_dist(0, encoded_payload.size() - 1);
+    std::uniform_int_distribution<int> bit_dist(0, 7);
 
-// function to randomly corrupt 1 or 2 bits in payload with probabilities 75% (1 bit) and 25% (2 bits)
-void randomly_corrupt_payload_bits(std::vector<uint8_t>& payload) {
-    if (payload.empty()) return;
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
-    std::uniform_int_distribution<int> prob(1, 100);
-    int p = prob(gen);
-    int flips = (p <= 75) ? 1 : 2;
-    std::uniform_int_distribution<size_t> bitpos(0, payload.size() * 8 - 1);
-    for (int f = 0; f < flips; ++f) {
-        size_t bit = bitpos(gen);
-        size_t byte_idx = bit / 8;
-        size_t bit_in_byte = bit % 8;
-        payload[byte_idx] ^= (uint8_t)(1u << bit_in_byte);
+    // Если нужно два бита — выбираем, возможно, два разных байта (или один и тот же)
+    for (int k = 0; k < bits_to_flip; ++k) {
+        size_t byte_idx = idx_dist(rng);
+        int bit = bit_dist(rng);
+        encoded_payload[byte_idx] ^= (1 << bit);
     }
 }
 
-// получение кадра: читаем все байты из порта, собираем кадры и объединяем payloads
-bool receive_frame(HANDLE hComm) {
-    std::vector<uint8_t> full_message; // для вывода всего сообщения
-    std::vector<uint8_t> raw_buffer;
-    // Читаем все доступные байты
-    if (!read_from_port(hComm, raw_buffer)) {
-        std::cout << "Нет данных для чтения." << std::endl;
-        return false;
-    }
-    // В raw_buffer может быть множество байтов, возможно несколько кадров подряд.
-    // Соберём кадры: ищем FLAG..FLAG
-    size_t idx = 0;
-    FrameInfo last_chunk_frame_local;
+bool receive_frame(HANDLE hComm, std::mt19937& rng) {
+    std::vector<uint8_t> full_message; // объединённый декодированный payload
+    char byte;
+    DWORD bytesRead;
+    std::vector<uint8_t> buffer;
+    bool started = false;
     bool any_frame = false;
-    while (idx < raw_buffer.size()) {
-        // найти старт
-        while (idx < raw_buffer.size() && raw_buffer[idx] != FLAG) ++idx;
-        if (idx >= raw_buffer.size()) break;
-        size_t start = idx;
-        ++idx;
-        // найти конец
-        while (idx < raw_buffer.size() && raw_buffer[idx] != FLAG) ++idx;
-        if (idx >= raw_buffer.size()) break;
-        size_t end = idx; // position of FLAG
-        // extract chunk [start..end]
-        std::vector<uint8_t> chunk(raw_buffer.begin() + start, raw_buffer.begin() + end + 1);
-        // de-stuff
-        std::vector<uint8_t> info = byte_unstuff(chunk); // info = addr..variant..payload..fcs
-        if (info.size() < 4) { idx = end + 1; continue; }
-        // split into payload and fcs
-        std::vector<uint8_t> payload, fcs;
-        bool ok = split_info_into_payload_and_fcs(info, payload, fcs);
-        if (!ok) { idx = end + 1; continue; }
 
-        // сохранить заголовок fields for last_chunk_frame_local
-        FrameInfo frame;
-        parse_information_field(info, frame);
-        frame.payload = payload;
-        frame.raw_frame = chunk;
-        frame.fcs_bytes = fcs;
+    while (true) {
+        COMSTAT comStat;
+        DWORD dwError;
+        ClearCommError(hComm, &dwError, &comStat);
 
-        // Случайная порча битов в поле данных (после приема), как требует задание
-        randomly_corrupt_payload_bits(frame.payload);
+        if (comStat.cbInQue == 0) break;
 
-        // Проверка Hamming и коррекция (если возможно)
-        if (!fcs.empty()) {
-            auto corrected = hamming_check_and_correct(frame.payload, frame.fcs_bytes);
-            int status = corrected.second;
-            if (status == 0) {
-                // no error
-                // frame.payload remains
+        if (!ReadFile(hComm, &byte, 1, &bytesRead, NULL) || bytesRead == 0)
+            continue;
+
+        uint8_t b = static_cast<uint8_t>(byte);
+
+        if (b == FLAG) {
+            if (!started) {
+                started = true;
+                buffer.clear();
+                buffer.push_back(b);
             }
-            else if (status == 1) {
-                // corrected single-bit error (or parity-bit error fixed)
-                frame.payload = corrected.first;
-                // можно логировать
-                std::cout << "Одиночная ошибка обнаружена и исправлена в кадре (seq=" << (int)frame.sequence << ").\n";
-            }
-            else if (status == 2) {
-                std::cout << "Двойная ошибка обнаружена (некорректируема) в кадре (seq=" << (int)frame.sequence << ").\n";
-            }
-            else if (status == 3) {
-                std::cout << "Ошибка только в общем бите паритета (поправлен общий паритет).\n";
+            else {
+                buffer.push_back(b);
+                // получили полный кадр в buffer
+                std::vector<uint8_t> unstuffed = byte_unstuff(buffer); // без флагов
+                FrameInfo frameTemp;
+                if (unstuffed.size() >= 6) { // минимум для length
+                    uint16_t length = (uint16_t(unstuffed[4]) << 8) | uint16_t(unstuffed[5]);
+                    size_t encoded_len = size_t(length) * 2;
+                    size_t expected_total = 1 + 1 + 1 + 1 + 2 + encoded_len + 2; // address..variant(4)+len(2)+encoded+FCS(2)
+                    if (unstuffed.size() >= expected_total) {
+                        size_t idx = 0;
+                        frameTemp.address = unstuffed[idx++];
+                        frameTemp.control = unstuffed[idx++];
+                        frameTemp.sequence = unstuffed[idx++];
+                        frameTemp.variant = unstuffed[idx++];
+                        frameTemp.length = (uint16_t(unstuffed[idx]) << 8) | uint16_t(unstuffed[idx + 1]);
+                        idx += 2;
+                        std::vector<uint8_t> encoded_payload(unstuffed.begin() + idx, unstuffed.begin() + idx + encoded_len);
+                        idx += encoded_len;
+                        uint16_t fcs = (uint16_t(unstuffed[idx]) << 8) | uint16_t(unstuffed[idx + 1]);
+                        idx += 2;
+
+                        // Искажение битов
+                        distort_encoded_payload(encoded_payload, rng);
+
+                        // Декодирование Хэмминга
+                        DecodeResult dr = hamming_decode_payload(encoded_payload, frameTemp.length);
+                        frameTemp.payload = std::move(dr.decoded);
+                        frameTemp.had_single_error = dr.had_single_error;
+                        frameTemp.had_double_error = dr.had_double_error;
+                        frameTemp.fcs = fcs;
+
+                        // Проверка FCS
+                        uint16_t calc_fcs = crc16_ccitt(frameTemp.payload);
+                        frameTemp.valid = (calc_fcs == frameTemp.fcs);
+
+                        // raw_frame
+                        frameTemp.raw_frame = buffer;
+
+                        full_message.insert(full_message.end(), frameTemp.payload.begin(), frameTemp.payload.end());
+                        any_frame = true;
+                    }
+                }
+                started = false;
+                buffer.clear();
             }
         }
-        else {
-            // нет FCS — ничего не делаем
+        else if (started) {
+            buffer.push_back(b);
         }
-
-        // Собираем payload для вывода всей строки
-        full_message.insert(full_message.end(), frame.payload.begin(), frame.payload.end());
-
-        any_frame = true;
-
-        idx = end + 1;
     }
 
     if (any_frame) {
-        if (!full_message.empty()) {
-            std::string message(full_message.begin(), full_message.end());
-            std::cout << "Принято сообщение: " << message << std::endl;
-        }
-        else {
-            std::cout << "Принято сообщение (пустое).\n";
-        }
-        return true;
+        std::string message(full_message.begin(), full_message.end());
+        std::cout << message << std::endl;
     }
     else {
-        std::cout << "Нет полных кадров в буфере.\n";
-        return false;
+        std::cout << "Нет данных для чтения." << std::endl;
     }
+
+    return any_frame;
 }

@@ -1,40 +1,8 @@
 #include "frame_config.h"
 #include <iostream>
+#include <sstream>
 #include "io.h"
-
-void print_frame_info(const FrameInfo& frame) {
-    // Первая строка: логические поля
-    std::cout << "| Флаг | Адрес | Управление | Счётчик | Вариант | FCS (hex bytes) | Данные |" << std::endl;
-
-    // Составим представление отдельных частей байт-строки (расщепление raw_frame по полям с учётом escape)
-    // Однако frame.raw_frame — это уже stuffed (с флагами). Для наглядности мы распечатаем сырые байты на второй строке.
-    // Первая строка — значения полей (логично)
-    std::cout << "| " << to_hex_string(frame.raw_frame.empty() ? 0 : frame.raw_frame.front())
-        << " | " << to_hex_string(frame.address)
-        << " | " << to_hex_string(frame.control)
-        << " | " << to_hex_string(frame.sequence)
-        << " | " << to_hex_string(frame.variant)
-        << " | ";
-
-    // FCS bytes
-    if (!frame.fcs_bytes.empty()) {
-        for (uint8_t b : frame.fcs_bytes) std::cout << to_hex_string(b) << " ";
-    }
-    else {
-        std::cout << "(none) ";
-    }
-
-    std::cout << "| ";
-
-    // данные (логические payload bytes)
-    for (uint8_t b : frame.payload) std::cout << to_hex_string(b) << " ";
-    std::cout << " |" << std::endl;
-
-    // Вторая строка: сырые байты (точно как прошли/пришли в порт) — raw_frame
-    std::cout << "Raw frame bytes (" << frame.raw_frame.size() << "): ";
-    for (uint8_t b : frame.raw_frame) std::cout << to_hex_string(b) << " ";
-    std::cout << std::endl << std::dec;
-}
+#include <iomanip>
 
 DWORD select_baud_rate() {
     int choice;
@@ -49,57 +17,41 @@ DWORD select_baud_rate() {
     return CBR_9600;
 }
 
-//void print_frame_info(const std::vector<uint8_t>& raw_frame) {
-//    size_t i = 0;
-//    std::cout << "Флаг начала кадра: " << to_hex_string(raw_frame[i++]) << "\n";
-//
-//    // --- Адрес ---
-//    std::cout << "Адрес: ";
-//    if (raw_frame[i] == 0x7D && i + 1 < raw_frame.size()) {
-//        std::cout << to_hex_string(raw_frame[i]) << " " << to_hex_string(raw_frame[i + 1]) << "\n";
-//        i += 2;
-//    }
-//    else {
-//        std::cout << to_hex_string(raw_frame[i++]) << "\n";
-//    }
-//
-//    // --- Управление ---
-//    std::cout << "Управление: ";
-//    if (raw_frame[i] == 0x7D && i + 1 < raw_frame.size()) {
-//        std::cout << to_hex_string(raw_frame[i]) << " " << to_hex_string(raw_frame[i + 1]) << "\n";
-//        i += 2;
-//    }
-//    else {
-//        std::cout << to_hex_string(raw_frame[i++]) << "\n";
-//    }
-//
-//    // --- Счётчик ---
-//    std::cout << "Счётчик: ";
-//    if (raw_frame[i] == 0x7D && i + 1 < raw_frame.size()) {
-//        std::cout << to_hex_string(raw_frame[i]) << " " << to_hex_string(raw_frame[i + 1]) << "\n";
-//        i += 2;
-//    }
-//    else {
-//        std::cout << to_hex_string(raw_frame[i++]) << "\n";
-//    }
-//
-//    // --- Вариант ---
-//    std::cout << "Вариант: ";
-//    if (raw_frame[i] == 0x7D && i + 1 < raw_frame.size()) {
-//        std::cout << to_hex_string(raw_frame[i]) << " " << to_hex_string(raw_frame[i + 1]) << "\n";
-//        i += 2;
-//    }
-//    else {
-//        std::cout << to_hex_string(raw_frame[i++]) << "\n";
-//    }
-//
-//    // --- Данные ---
-//    std::cout << "Данные: ";
-//    for (; i < raw_frame.size() - 1; ++i) {
-//        std::cout << to_hex_string(raw_frame[i]) << " ";
-//    }
-//    std::cout << "\n";
-//
-//    // --- Конечный флаг ---
-//    std::cout << "Флаг конца кадра: " << to_hex_string(raw_frame.back()) << "\n\n";
-//}
+void print_frame_info(const FrameInfo& frame) {
+    const std::vector<uint8_t>& raw_frame = frame.raw_frame;
+    if (raw_frame.empty()) {
+        std::cout << "Кадр пуст.\n";
+        return;
+    }
+
+    size_t i = 0;
+    std::cout << "Флаг начала кадра: " << to_hex_string(raw_frame[i++]) << "\n";
+
+    auto print_byte = [&](size_t& idx) {
+        if (raw_frame[idx] == 0x7D && idx + 1 < raw_frame.size()) {
+            std::cout << to_hex_string(raw_frame[idx]) << " " << to_hex_string(raw_frame[idx + 1]);
+            idx += 2;
+        }
+        else {
+            std::cout << to_hex_string(raw_frame[idx++]);
+        }
+        };
+
+    std::cout << "Адрес: "; print_byte(i); std::cout << "\n";
+    std::cout << "Управление: "; print_byte(i); std::cout << "\n";
+    std::cout << "Счётчик: "; print_byte(i); std::cout << "\n";
+    std::cout << "Вариант: "; print_byte(i); std::cout << "\n";
+    std::cout << "Длинна поля данных: "; print_byte(i); std::cout << " "; print_byte(i); std::cout << "\n";
+
+    // Данные (payload + FCS)
+    std::cout << "Данные, закодированные кодом Хэмминга: ";
+    for (; i < raw_frame.size() - 3; ++i) {
+        std::cout << to_hex_string(raw_frame[i]) << " ";
+    }
+    std::cout << "\n";
+    std::cout << "FCS: "; print_byte(i); std::cout << " "; print_byte(i); std::cout << "\n";
+
+    std::cout << "Флаг конца кадра: " << to_hex_string(raw_frame.back()) << "\n";
+
+    std::cout << std::endl;
+}

@@ -29,6 +29,9 @@ int main() {
     SetConsoleOutputCP(1251);
     SetConsoleCP(1251);
 
+    std::random_device rd;
+    std::mt19937 rng((unsigned)time(NULL) ^ rd());
+
     DWORD baudRate = CBR_9600;
 
     hComm1 = open_com_port(COM_PORT1);
@@ -72,13 +75,13 @@ int main() {
 
         switch (choice) {
         case 1: {
-            std::cout << "Введите сообщение: ";
+            std::cout << "Введите сообщение: \n";
             std::getline(std::cin, message);
             send_string_as_frame(last_sent_frame, hComm1, message, seq, 0x01, 0x00, variant);
             break;
         }
         case 2: {
-            receive_frame(hComm2);
+            receive_frame(hComm2, rng);
             break;
         }
         case 3: {

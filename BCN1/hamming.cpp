@@ -1,240 +1,135 @@
-#define _CRT_SECURE_NO_WARNINGS
-#define NOMINMAX
-#include "main.h"
-#include <algorithm> // для std::min
-#include <windows.h>
 #include <vector>
 #include <iostream>
-#include <string>
-#include <locale.h>
-#include <stdbool.h>
-#include <limits>
-#include <sstream>
-#include <iomanip>
-#include <random>
 #include <cmath>
+#include <cstdint>
+#include <utility>
 #include "io.h"
+#include "hamming.h"
 
-int compute_hamming_m(size_t k_bits) {
-    int m = 1;
-    // Для Hamming SECDED: нужно m такое, что 2^m >= k + m + 1
-    // (мы потом добавим ещё общий паритет как отдельный бит)
-    while ((1ULL << m) < (k_bits + m + 1ULL)) {
-        ++m;
-        if (m > 64) break;
+uint8_t hamming_encode_nibble(uint8_t nibble4) {
+    // nibble4: bits b0..b3 (LSB..MSB) => d1..d4
+    int d1 = (nibble4 >> 0) & 1;
+    int d2 = (nibble4 >> 1) & 1;
+    int d3 = (nibble4 >> 2) & 1;
+    int d4 = (nibble4 >> 3) & 1;
+
+    int p1 = d1 ^ d2 ^ d4;       // parity for positions 1 (covers 1,3,5,7 -> bits 3,5,7 correspond to d1,d2,d4)
+    int p2 = d1 ^ d3 ^ d4;       // covers positions 2,3,6,7 -> d1,d3,d4
+    int p3 = d2 ^ d3 ^ d4;       // covers positions 4,5,6,7 -> d2,d3,d4
+
+    // compose bits into byte (positions -> bit indices)
+    uint8_t code = 0;
+    // set positions 3,5,6,7 data
+    if (d1) code |= (1 << (3 - 1));
+    if (d2) code |= (1 << (5 - 1));
+    if (d3) code |= (1 << (6 - 1));
+    if (d4) code |= (1 << (7 - 1));
+    if (p1) code |= (1 << (1 - 1));
+    if (p2) code |= (1 << (2 - 1));
+    if (p3) code |= (1 << (4 - 1));
+    // overall parity p0 such that parity of bits1..8 == 0 (even)
+    int parity = 0;
+    for (int pos = 1; pos <= 7; ++pos) {
+        parity ^= ((code >> (pos - 1)) & 1);
     }
-    return m;
+    int p0 = parity; // set so total parity even
+    if (p0) code |= (1 << (8 - 1));
+    return code;
 }
 
-// формирование FCS (m контрольных бит + 1 overall parity)
-// Возвращает байтовый вектор (LSB-first) который содержит (m bits) then overall parity bit (в младших битах)
-std::vector<uint8_t> build_fcs_from_payload(const std::vector<uint8_t>& payload) {
-    // payload -> bits
-    std::vector<int> data_bits;
-    data_bits.reserve(payload.size() * 8);
-    for (uint8_t b : payload) {
-        for (int i = 0; i < 8; ++i) data_bits.push_back((b >> i) & 1); // LSB-first per byte
-    }
-    size_t k = data_bits.size();
-    int m = compute_hamming_m(k);
-    size_t n = k + m; // codeword length without overall parity
-    // codeword positions 1..n (1-indexed); parity positions are powers of two
-    std::vector<int> codeword(n + 1, 0); // index 0 unused
+// decode one 8-bit code -> nibble + status
 
-    // fill data bits into codeword positions that are not powers of two
-    size_t di = 0;
-    for (size_t pos = 1; pos <= n; ++pos) {
-        bool is_parity_pos = ((pos & (pos - 1)) == 0);
-        if (!is_parity_pos) {
-            if (di < data_bits.size()) {
-                codeword[pos] = data_bits[di++];
-            }
-            else {
-                codeword[pos] = 0;
-            }
-        }
-    }
-    // compute parity bits
-    std::vector<int> parity_bits(m + 1, 0); // 1..m
-    for (int i = 1; i <= m; ++i) {
-        int p = 0;
-        size_t mask = 1u << (i - 1);
-        for (size_t pos = 1; pos <= n; ++pos) {
-            if (pos & mask) p ^= codeword[pos];
-        }
-        parity_bits[i] = p;
-        // put in codeword for overall parity calc
-        codeword[mask] = p;
-    }
-    // overall parity (parity of all bits in codeword including parity bits)
-    int overall = 0;
-    for (size_t pos = 1; pos <= n; ++pos) overall ^= codeword[pos];
-    // prepare FCS bits: parity_bits[1..m] (in order) then overall
-    std::vector<int> fcs_bits;
-    for (int i = 1; i <= m; ++i) fcs_bits.push_back(parity_bits[i]);
-    fcs_bits.push_back(overall); // last bit = overall parity
-    // pack bits into bytes (LSB-first)
-    size_t fcs_bits_count = fcs_bits.size();
-    size_t fcs_bytes = (fcs_bits_count + 7) / 8;
-    std::vector<uint8_t> fcs(fcs_bytes, 0);
-    for (size_t i = 0; i < fcs_bits_count; ++i) {
-        if (fcs_bits[i]) {
-            size_t byte_idx = i / 8;
-            size_t bit_idx = i % 8;
-            fcs[byte_idx] |= (uint8_t)(1u << bit_idx);
-        }
-    }
-    return fcs;
-}
+HammingResult hamming_decode_byte(uint8_t code) {
+    // extract bits positions 1..8
+    auto bit = [&](int pos)->int { return (code >> (pos - 1)) & 1; };
 
-// распаковка FCS байтов в битовый вектор (возвращает вектор<int> длины m+1)
-std::vector<int> unpack_fcs_bits(const std::vector<uint8_t>& fcs_bytes, int expected_bits_count) {
-    std::vector<int> bits;
-    bits.reserve(expected_bits_count);
-    for (int i = 0; i < expected_bits_count; ++i) {
-        int byte_idx = i / 8;
-        int bit_idx = i % 8;
-        if (byte_idx < (int)fcs_bytes.size()) {
-            bits.push_back((fcs_bytes[byte_idx] >> bit_idx) & 1);
-        }
-        else bits.push_back(0);
-    }
-    return bits;
-}
+    // recompute parity checks (p1', p2', p3')
+    int p1_check = bit(1) ^ bit(3) ^ bit(5) ^ bit(7); // should be 0 for no error
+    int p2_check = bit(2) ^ bit(3) ^ bit(6) ^ bit(7);
+    int p3_check = bit(4) ^ bit(5) ^ bit(6) ^ bit(7);
+    int syndrome = (p3_check << 2) | (p2_check << 1) | (p1_check << 0); // binary index (3..1)
 
-// Given payload bits and received fcs_bits (size m+1), compute syndrome and overall parity mismatch,
-// return pair(syndrome (0 means none), overall_mismatch (0/1))
-std::pair<uint64_t, int> compute_syndrome_and_parity(const std::vector<uint8_t>& payload, const std::vector<int>& received_fcs_bits) {
-    // reconstruct codeword positions 1..n where n = k + m
-    std::vector<int> data_bits;
-    for (uint8_t b : payload) for (int i = 0; i < 8; ++i) data_bits.push_back((b >> i) & 1);
-    size_t k = data_bits.size();
-    int m = (int)received_fcs_bits.size() - 1; // last bit is overall
-    size_t n = k + m;
-    std::vector<int> codeword(n + 1, 0);
-    // fill data bits into non-parity positions
-    size_t di = 0;
-    for (size_t pos = 1; pos <= n; ++pos) {
-        bool is_parity_pos = ((pos & (pos - 1)) == 0);
-        if (!is_parity_pos) {
-            if (di < data_bits.size()) codeword[pos] = data_bits[di++];
-            else codeword[pos] = 0;
-        }
-    }
-    // place received parity bits into their positions
-    for (int i = 1; i <= m; ++i) {
-        size_t pos = (1u << (i - 1));
-        if (pos <= n) codeword[pos] = received_fcs_bits[i - 1];
-    }
-    // compute syndrome: recompute parity bits and compare
-    uint64_t syndrome = 0;
-    for (int i = 1; i <= m; ++i) {
-        int p = 0;
-        size_t mask = 1u << (i - 1);
-        for (size_t pos = 1; pos <= n; ++pos) {
-            if (pos & mask) p ^= codeword[pos];
-        }
-        int received_p = received_fcs_bits[i - 1];
-        if (p != received_p) syndrome |= (1ULL << (i - 1));
-    }
-    // compute overall parity over codeword
-    int overall_calc = 0;
-    for (size_t pos = 1; pos <= n; ++pos) overall_calc ^= codeword[pos];
-    int received_overall = received_fcs_bits[m];
-    int overall_mismatch = overall_calc ^ received_overall;
-    return { syndrome, overall_mismatch };
-}
+    // overall parity check
+    int parity_all = 0;
+    for (int pos = 1; pos <= 8; ++pos) parity_all ^= bit(pos);
 
-// Apply correction: if single-bit error -> flip bit in payload or parity (if syndrome position is parity pos).
-// Returns pair(corrected_payload_bytes, status): status 0=no error,1=corrected single,2=double detected/uncorrectable,3=parity-bit error fixed
-std::pair<std::vector<uint8_t>, int> hamming_check_and_correct(std::vector<uint8_t> payload, const std::vector<uint8_t>& fcs_bytes) {
-    // compute k,m and unpack fcs bits
-    std::vector<int> data_bits;
-    for (uint8_t b : payload) for (int i = 0; i < 8; ++i) data_bits.push_back((b >> i) & 1);
-    size_t k = data_bits.size();
-    int m = compute_hamming_m(k);
-    int total_bits = m + 1;
-    std::vector<int> received_fcs_bits = unpack_fcs_bits(fcs_bytes, total_bits);
-    // DEBUG: print payload before correction
-    std::cout << "[HAMMING] payload before: ";
-    for (auto b : payload) std::cout << to_hex_string(b) << " ";
-    std::cout << "\n[HAMMING] payload bits: ";
-    for (auto b : payload) {
-        for (int i = 0; i < 8; ++i) std::cout << ((b >> i) & 1);
-        std::cout << " ";
-    }
-    std::cout << "\n[HAMMING] received FCS bits: ";
-    for (int bit : received_fcs_bits) std::cout << bit;
-    std::cout << std::endl;
-
-    auto pr = compute_syndrome_and_parity(payload, received_fcs_bits);
-    uint64_t syndrome = pr.first;
-    int overall_mismatch = pr.second;
-    std::cout << "[HAMMING] syndrome=" << syndrome << " overall_mismatch=" << overall_mismatch << std::endl;
-
-
-    size_t n = k + m;
-    if (syndrome == 0 && overall_mismatch == 0) {
+    if (syndrome == 0 && parity_all == 0) {
         // no error
-        return { payload, 0 };
+        uint8_t d1 = bit(3), d2 = bit(5), d3 = bit(6), d4 = bit(7);
+        uint8_t nib = (d1 << 0) | (d2 << 1) | (d3 << 2) | (d4 << 3);
+        return { nib, HammingStatus::OK };
     }
-    else if (syndrome == 0 && overall_mismatch == 1) {
-        // error in overall parity bit only -> can "fix" parity but data intact
-        return { payload, 3 };
+    if (syndrome == 0 && parity_all == 1) {
+        // single-bit error in overall parity bit (pos 8)
+        // correct by flipping pos8
+        code ^= (1 << (8 - 1));
+        uint8_t d1 = (code >> (3 - 1)) & 1;
+        uint8_t d2 = (code >> (5 - 1)) & 1;
+        uint8_t d3 = (code >> (6 - 1)) & 1;
+        uint8_t d4 = (code >> (7 - 1)) & 1;
+        uint8_t nib = (d1 << 0) | (d2 << 1) | (d3 << 2) | (d4 << 3);
+        return { nib, HammingStatus::CORRECTED };
     }
-    else if (syndrome != 0 && overall_mismatch == 1) {
-        uint64_t pos = syndrome; // 1-indexed position of error within codeword (1..n)
+    if (syndrome != 0 && parity_all == 1) {
+        // single-bit error at position = syndrome (1..7)
+        int pos = syndrome;
+        code ^= (1 << (pos - 1)); // flip erroneous bit
+        uint8_t d1 = (code >> (3 - 1)) & 1;
+        uint8_t d2 = (code >> (5 - 1)) & 1;
+        uint8_t d3 = (code >> (6 - 1)) & 1;
+        uint8_t d4 = (code >> (7 - 1)) & 1;
+        uint8_t nib = (d1 << 0) | (d2 << 1) | (d3 << 2) | (d4 << 3);
+        return { nib, HammingStatus::CORRECTED };
+    }
+    if (syndrome != 0 && parity_all == 0) {
+        // syndrome nonzero but overall parity even => detected double-bit error (uncorrectable)
+        return { 0, HammingStatus::DOUBLE_ERROR };
+    }
+    // Fallback
+    return { 0, HammingStatus::DOUBLE_ERROR };
+}
 
-        if (pos >= 1 && pos <= n) {
-            // flip bit at pos (could be parity position or data position)
-            bool is_parity = ((pos & (pos - 1)) == 0);
-            if (is_parity) {
-                // error in some parity bit -> flipping parity would be fixing FCS (we don't change payload)
-                return { payload, 1 }; // treated as corrected single-bit (parity) — payload unchanged
-            }
-            else {
-                // map pos to data bit index and flip it
-                // find index (0..k-1) of data bit at position pos
-                size_t di = 0;
-                for (size_t p = 1; p <= n; ++p) {
-                    bool is_par = ((p & (p - 1)) == 0);
-                    if (!is_par) {
-                        if (p == pos) {
-                            // flip data bit at index di
+// encode whole payload: each input byte -> two code bytes
+std::vector<uint8_t> hamming_encode_payload(const std::vector<uint8_t>& payload) {
+    std::vector<uint8_t> encoded;
+    encoded.reserve(payload.size() * 2);
+    for (uint8_t b : payload) {
+        uint8_t low = b & 0x0F;
+        uint8_t high = (b >> 4) & 0x0F;
+        encoded.push_back(hamming_encode_nibble(low));
+        encoded.push_back(hamming_encode_nibble(high));
+    }
+    return encoded;
+}
 
-                            size_t bit_idx = di;
-                            size_t byte_idx = bit_idx / 8;
-                            size_t bit_in_byte = bit_idx % 8;
-                            std::cout << "[HAMMING] will flip codeword pos " << pos;
-                            if (!is_parity) std::cout << " -> data bit index " << di << " (byte " << byte_idx << " bit " << bit_in_byte << ")";
-                            std::cout << std::endl;
-                            if (byte_idx < payload.size()) {
-                                payload[byte_idx] ^= (uint8_t)(1u << bit_in_byte);
-                                std::cout << "[HAMMING] payload after: ";
-                                for (auto b : payload) std::cout << to_hex_string(b) << " ";
-                                std::cout << std::endl;
-                                return { payload, 1 };
-                            }
+// decode whole encoded payload (encoded.size() must be == original_length*2)
+// returns tuple(decoded_payload, had_single_error, had_double_error)
 
-                            else {
-                                return { payload, 2 };
-                            }
-                        }
-                        di++;
-                    }
-                }
-                return { payload, 2 };
-            }
+DecodeResult hamming_decode_payload(const std::vector<uint8_t>& encoded, size_t orig_length) {
+    DecodeResult res;
+    res.decoded.resize(orig_length);
+    res.had_single_error = false;
+    res.had_double_error = false;
+    // encoded length expected = orig_length*2
+    if (encoded.size() < orig_length * 2) {
+        // malformed
+        res.decoded.clear();
+        res.had_double_error = true;
+        return res;
+    }
+    for (size_t i = 0; i < orig_length; ++i) {
+        uint8_t code_low = encoded[2 * i];
+        uint8_t code_high = encoded[2 * i + 1];
+        HammingResult r1 = hamming_decode_byte(code_low);
+        HammingResult r2 = hamming_decode_byte(code_high);
+        if (r1.status == HammingStatus::DOUBLE_ERROR || r2.status == HammingStatus::DOUBLE_ERROR) {
+            res.had_double_error = true;
         }
-        else {
-            return { payload, 2 };
+        if (r1.status == HammingStatus::CORRECTED || r2.status == HammingStatus::CORRECTED) {
+            res.had_single_error = true;
         }
+        uint8_t byte = ((r2.nibble & 0x0F) << 4) | (r1.nibble & 0x0F);
+        res.decoded[i] = byte;
     }
-    else if (syndrome != 0 && overall_mismatch == 0) {
-        // detected double-bit error (syndrome nonzero but overall parity says even) -> uncorrectable
-        return { payload, 2 };
-    }
-    else {
-        return { payload, 2 };
-    }
+    return res;
 }
