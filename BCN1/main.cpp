@@ -17,9 +17,9 @@ HANDLE hComm2;
 
 #define COM_PORT1 L"COM2"
 #define COM_PORT2 L"COM4"
+#define FLAG 0x04
 
 FrameInfo last_sent_frame;
-FrameInfo last_received_frame;
 
 void print_last_error() {
     DWORD dwError = GetLastError();
@@ -98,7 +98,7 @@ void parse_information_field(const std::vector<uint8_t>& info, FrameInfo& frame)
 std::vector<uint8_t> byte_stuff(const std::vector<uint8_t>& data) {
     std::vector<uint8_t> stuffed;
     for (uint8_t byte : data) {
-        if (byte == 0x7E || byte == 0x7D) {
+        if (byte == FLAG || byte == 0x7D) {
             stuffed.push_back(0x7D);
             stuffed.push_back(byte ^ 0x20);
         }
@@ -106,8 +106,8 @@ std::vector<uint8_t> byte_stuff(const std::vector<uint8_t>& data) {
             stuffed.push_back(byte);
         }
     }
-    stuffed.insert(stuffed.begin(), 0x7E);
-    stuffed.push_back(0x7E);
+    stuffed.insert(stuffed.begin(), FLAG);
+    stuffed.push_back(FLAG);
     return stuffed;
 }
 
@@ -178,7 +178,6 @@ bool send_string_as_frame(HANDLE hComm, const std::string& message, uint8_t& seq
         offset += chunk_size;
     }
 
-    std::cout << "Отправлено сообщение: " << message << std::endl;
     return true;
 }
 
@@ -202,7 +201,7 @@ bool receive_frame(HANDLE hComm) {
 
         uint8_t b = static_cast<uint8_t>(byte);
 
-        if (b == 0x7E) {
+        if (b == FLAG) {
             if (!started) {
                 started = true;
                 buffer.clear();
@@ -213,10 +212,6 @@ bool receive_frame(HANDLE hComm) {
                 std::vector<uint8_t> unstuffed = byte_unstuff(buffer);
                 FrameInfo frame;
                 parse_information_field(unstuffed, frame);
-
-                // сохраняем **последний кадр**
-                last_received_frame = frame;
-                last_received_frame.raw_frame = buffer;
 
                 // добавляем payload к общей строке
                 full_message.insert(full_message.end(), frame.payload.begin(), frame.payload.end());
@@ -251,20 +246,60 @@ std::string to_hex_string(uint8_t value) {
 
 // Печать кадра в двух видах
 void print_frame_info(const std::vector<uint8_t>& raw_frame) {
-    std::cout << "Флаг: " << to_hex_string(raw_frame[0]) << "\n";
-    std::cout << "Адрес: " << to_hex_string(raw_frame[1]) << "\n";
-    std::cout << "Управление: " << to_hex_string(raw_frame[2]) << "\n";
-    std::cout << "Счётчик: " << to_hex_string(raw_frame[3]) << "\n";
-    std::cout << "Вариант: " << to_hex_string(raw_frame[4]) << "\n";
+    size_t i = 0;
+    std::cout << "Флаг начала кадра: " << to_hex_string(raw_frame[i++]) << "\n";
 
-    std::cout << "Данные (" << (raw_frame.size() - 6) << " байт): ";
-    for (int i = 5; i < raw_frame.size()-1; i++) {
+    // --- Адрес ---
+    std::cout << "Адрес: ";
+    if (raw_frame[i] == 0x7D && i + 1 < raw_frame.size()) {
+        std::cout << to_hex_string(raw_frame[i]) << " " << to_hex_string(raw_frame[i + 1]) << "\n";
+        i += 2;
+    }
+    else {
+        std::cout << to_hex_string(raw_frame[i++]) << "\n";
+    }
+
+    // --- Управление ---
+    std::cout << "Управление: ";
+    if (raw_frame[i] == 0x7D && i + 1 < raw_frame.size()) {
+        std::cout << to_hex_string(raw_frame[i]) << " " << to_hex_string(raw_frame[i + 1]) << "\n";
+        i += 2;
+    }
+    else {
+        std::cout << to_hex_string(raw_frame[i++]) << "\n";
+    }
+
+    // --- Счётчик ---
+    std::cout << "Счётчик: ";
+    if (raw_frame[i] == 0x7D && i + 1 < raw_frame.size()) {
+        std::cout << to_hex_string(raw_frame[i]) << " " << to_hex_string(raw_frame[i + 1]) << "\n";
+        i += 2;
+    }
+    else {
+        std::cout << to_hex_string(raw_frame[i++]) << "\n";
+    }
+
+    // --- Вариант ---
+    std::cout << "Вариант: ";
+    if (raw_frame[i] == 0x7D && i + 1 < raw_frame.size()) {
+        std::cout << to_hex_string(raw_frame[i]) << " " << to_hex_string(raw_frame[i + 1]) << "\n";
+        i += 2;
+    }
+    else {
+        std::cout << to_hex_string(raw_frame[i++]) << "\n";
+    }
+
+    // --- Данные ---
+    std::cout << "Данные: ";
+    for (; i < raw_frame.size() - 1; ++i) {
         std::cout << to_hex_string(raw_frame[i]) << " ";
     }
-    std::cout << std::endl;
-    std::cout << "Флаг: " << to_hex_string(raw_frame[raw_frame.size()-1]) << "\n";
-    std::cout << std::endl;
+    std::cout << "\n";
+
+    // --- Конечный флаг ---
+    std::cout << "Флаг конца кадра: " << to_hex_string(raw_frame.back()) << "\n\n";
 }
+
 
 
 DWORD select_baud_rate() {
@@ -303,7 +338,7 @@ int main() {
     std::string message;
     int choice = -1;
     uint8_t seq = 0;
-    uint8_t variant = 0x04;
+    uint8_t variant = 0x03;
 
     while (true) {
         std::cout << "\nМеню:\n";
@@ -311,7 +346,6 @@ int main() {
         std::cout << "2 - Прочитать сообщение\n";
         std::cout << "3 - Установить скорость передачи\n";
         std::cout << "4 - Просмотр последнего отправленного кадра\n";
-        std::cout << "5 - Просмотр последнего принятого кадра\n";
         std::cout << "0 - Выход\n";
         std::cout << "Ваш выбор: ";
         std::cin >> choice;
@@ -335,10 +369,6 @@ int main() {
         case 4:
             std::cout << "Последний отправленный кадр:\n";
             print_frame_info(last_sent_frame.raw_frame);
-            break;
-        case 5:
-            std::cout << "Последний принятый кадр:\n";
-            print_frame_info(last_received_frame.raw_frame);
             break;
         case 0:
             CloseHandle(hComm1);
