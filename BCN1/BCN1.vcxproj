@@ -123,10 +123,23 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="cli.cpp" />
+    <ClCompile Include="com_config.cpp" />
+    <ClCompile Include="frame_config.cpp" />
+    <ClCompile Include="io.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="hamming.cpp" />
+    <ClCompile Include="receive.cpp" />
+    <ClCompile Include="send.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="main.h" />
+    <ClInclude Include="cli.h" />
+    <ClInclude Include="com_config.h" />
+    <ClInclude Include="frame_config.h" />
+    <ClInclude Include="hamming.h" />
+    <ClInclude Include="io.h" />
+    <ClInclude Include="receive.h" />
+    <ClInclude Include="send.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
