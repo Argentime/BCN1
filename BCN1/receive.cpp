@@ -5,23 +5,36 @@
 #include "hamming.h"
 #include "com_config.h"
 #include "io.h"
+#include "cli.h"
 
-void distort_encoded_payload(std::vector<uint8_t>& encoded_payload, std::mt19937& rng) {
-    if (encoded_payload.empty()) return;
+// Функции искажения:
+// distort_payload - искажает байты данных в payload
+// distort_parity_bits - искажает байты проверочных бит
+// Можем объединить их или оставить как есть.
+// Для простоты я сделаю одну функцию, которая искажает либо payload, либо parity_bits.
+
+void distort_frame_data(std::vector<uint8_t>& payload, std::mt19937& rng) {
     std::uniform_real_distribution<double> prob(0.0, 1.0);
     double p = prob(rng);
-    int bits_to_flip = (p < 0.75) ? 1 : 2; // 75% -> 1, 25% -> 2
+    int bits_to_flip = 0;
+    if (p < 0.75) bits_to_flip = 1; // 75% -> 1 бит
+    else bits_to_flip = 2; // 25% -> 2 бита (остается 5% без ошибок)
 
-    std::uniform_int_distribution<size_t> idx_dist(0, encoded_payload.size() - 1);
-    std::uniform_int_distribution<int> bit_dist(0, 7);
+    if (bits_to_flip == 0) return;
 
-    // Если нужно два бита — выбираем, возможно, два разных байта (или один и тот же)
     for (int k = 0; k < bits_to_flip; ++k) {
-        size_t byte_idx = idx_dist(rng);
-        int bit = bit_dist(rng);
-        encoded_payload[byte_idx] ^= (1 << bit);
+        // Случайным образом выбираем, исказить ли payload или parity_bits
+
+        if (!payload.empty()) {
+            std::uniform_int_distribution<size_t> byte_idx_dist(0, payload.size() - 1);
+            std::uniform_int_distribution<int> bit_dist(0, 7);
+            size_t byte_idx = byte_idx_dist(rng);
+            int bit = bit_dist(rng);
+            payload[byte_idx] ^= (1 << bit);
+        }
     }
 }
+
 
 bool receive_frame(HANDLE hComm, std::mt19937& rng) {
     std::vector<uint8_t> full_message; // объединённый декодированный payload
@@ -54,42 +67,60 @@ bool receive_frame(HANDLE hComm, std::mt19937& rng) {
                 // получили полный кадр в buffer
                 std::vector<uint8_t> unstuffed = byte_unstuff(buffer); // без флагов
                 FrameInfo frameTemp;
-                if (unstuffed.size() >= 6) { // минимум для length
-                    uint16_t length = (uint16_t(unstuffed[4]) << 8) | uint16_t(unstuffed[5]);
-                    size_t encoded_len = size_t(length) * 2;
-                    size_t expected_total = 1 + 1 + 1 + 1 + 2 + encoded_len + 2; // address..variant(4)+len(2)+encoded+FCS(2)
-                    if (unstuffed.size() >= expected_total) {
-                        size_t idx = 0;
-                        frameTemp.address = unstuffed[idx++];
-                        frameTemp.control = unstuffed[idx++];
-                        frameTemp.sequence = unstuffed[idx++];
-                        frameTemp.variant = unstuffed[idx++];
-                        frameTemp.length = (uint16_t(unstuffed[idx]) << 8) | uint16_t(unstuffed[idx + 1]);
-                        idx += 2;
-                        std::vector<uint8_t> encoded_payload(unstuffed.begin() + idx, unstuffed.begin() + idx + encoded_len);
-                        idx += encoded_len;
-                        uint16_t fcs = (uint16_t(unstuffed[idx]) << 8) | uint16_t(unstuffed[idx + 1]);
-                        idx += 2;
 
-                        // Искажение битов
-                        distort_encoded_payload(encoded_payload, rng);
+                // Парсим информационное поле с новой функцией
+                // parse_information_field_with_dynamic_fcs модифицирует frameTemp.payload и frameTemp.fcs_parity_bits
+                // до применения искажений. Нам нужно исказить ДО парсинга.
+                // Поэтому, сначала парсим, потом искажаем, потом повторно применяем Хэмминг,
+                // либо парсим, получаем сырые данные, искажаем их, и уже потом применяем Хэмминг.
 
-                        // Декодирование Хэмминга
-                        DecodeResult dr = hamming_decode_payload(encoded_payload, frameTemp.length);
-                        frameTemp.payload = std::move(dr.decoded);
-                        frameTemp.had_single_error = dr.had_single_error;
-                        frameTemp.had_double_error = dr.had_double_error;
-                        frameTemp.fcs = fcs;
+                // Для корректной симуляции, нам нужно отделить данные до искажения.
+                // 1. Считываем заголовок и длину.
+                // 2. Считываем `payload` (length байтов).
+                // 3. Считываем `parity_bits` (остаток до флага).
+                // 4. Искажаем `payload` и/или `parity_bits`.
+                // 5. Передаем искаженные данные в `hamming_decode_with_parity_bits`.
+                // 6. Обновляем `frameTemp` полями из `DecodeHammingParityResult`.
 
-                        // Проверка FCS
-                        uint16_t calc_fcs = crc16_ccitt(frameTemp.payload);
-                        frameTemp.valid = (calc_fcs == frameTemp.fcs);
+                if (unstuffed.size() >= 6) { // Min size: address(1)+control(1)+seq(1)+variant(1)+length(2)
+                    size_t idx = 0;
+                    uint8_t address = unstuffed[idx++];
+                    uint8_t control = unstuffed[idx++];
+                    uint8_t sequence = unstuffed[idx++];
+                    uint8_t variant = unstuffed[idx++];
+                    uint16_t length = (uint16_t(unstuffed[idx]) << 8) | uint16_t(unstuffed[idx + 1]);
+                    idx += 2;
 
-                        // raw_frame
-                        frameTemp.raw_frame = buffer;
+                    // Убеждаемся, что есть достаточно данных для payload
+                    if (idx + length <= unstuffed.size()) {
+                        std::vector<uint8_t> received_payload(unstuffed.begin() + idx, unstuffed.begin() + idx + length);
+                        idx += length;
+                        std::vector<uint8_t> received_parity_bits(unstuffed.begin() + idx, unstuffed.end());
+
+                        // --- Искажение данных ---
+                        distort_frame_data(received_payload, rng);
+                        // --- Конец искажения ---
+
+                        // Применяем декодирование Хэмминга к (возможно) искаженным данным
+                        DecodeHammingParityResult hamming_res = hamming_decode_with_parity_bits(received_payload, received_parity_bits);
+
+                        frameTemp.address = address;
+                        frameTemp.control = control;
+                        frameTemp.sequence = sequence;
+                        frameTemp.variant = variant;
+                        frameTemp.length = length;
+                        frameTemp.payload = hamming_res.decoded_payload; // Уже исправленный payload
+                        frameTemp.fcs_parity_bits = received_parity_bits; // Сохраняем полученные (возможно искаженные) parity bits
+                        frameTemp.had_single_error = hamming_res.had_single_error;
+                        frameTemp.had_double_error = hamming_res.had_double_error;
+                        frameTemp.valid = !frameTemp.had_double_error; // Кадр валиден, если нет двойных ошибок
+
+                        frameTemp.raw_frame = buffer; // Сохраняем весь raw кадр для печати
 
                         full_message.insert(full_message.end(), frameTemp.payload.begin(), frameTemp.payload.end());
                         any_frame = true;
+                        print_frame_info_with_hamming_status(frameTemp);
+
                     }
                 }
                 started = false;
@@ -101,12 +132,12 @@ bool receive_frame(HANDLE hComm, std::mt19937& rng) {
         }
     }
 
-    if (any_frame) {
-        std::string message(full_message.begin(), full_message.end());
-        std::cout << message << std::endl;
+    if (!any_frame) {
+        std::cout << "Нет данных для чтения." << std::endl;
     }
     else {
-        std::cout << "Нет данных для чтения." << std::endl;
+        std::string message(full_message.begin(), full_message.end());
+        std::cout << message << std::endl;
     }
 
     return any_frame;
