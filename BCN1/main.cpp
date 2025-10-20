@@ -12,6 +12,7 @@
 #include <limits>
 #include <sstream>
 #include <iomanip>
+#include <conio.h>
 #include "com_config.h"
 #include "cli.h"
 #include "send.h"
@@ -41,7 +42,7 @@ int main() {
         if (hComm2 != NULL) CloseHandle(hComm2);
         std::cout << "Не удалось открыть один или оба COM-порта.\n";
         std::cout << "Выход из программы... ";
-        system("pause");
+        _getch();
         return 1;
     }
 
@@ -107,6 +108,6 @@ int main() {
         }
     }
     std::cout << "Выход из программы... ";
-    system("pause");
+    _getch();
     return 0;
 }

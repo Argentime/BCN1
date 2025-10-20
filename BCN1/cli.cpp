@@ -12,6 +12,7 @@ DWORD select_baud_rate() {
     for (int i = 0; i < numRates; i++) std::cout << i + 1 << " - " << baudRates[i] << std::endl;
     std::cout << "Введите номер: ";
     std::cin >> choice;
+    while ((getchar()) != '\n');
     if (choice >= 1 && choice <= numRates) return baudRates[choice - 1];
     std::cout << "Неверный выбор. Устанавливается 9600\n";
     return CBR_9600;
