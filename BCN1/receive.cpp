@@ -7,12 +7,6 @@
 #include "io.h"
 #include "cli.h"
 
-// Функции искажения:
-// distort_payload - искажает байты данных в payload
-// distort_parity_bits - искажает байты проверочных бит
-// Можем объединить их или оставить как есть.
-// Для простоты я сделаю одну функцию, которая искажает либо payload, либо parity_bits.
-
 void distort_frame_data(std::vector<uint8_t>& payload, std::mt19937& rng) {
     std::uniform_real_distribution<double> prob(0.0, 1.0);
     double p = prob(rng);
@@ -68,20 +62,6 @@ bool receive_frame(HANDLE hComm, std::mt19937& rng) {
                 std::vector<uint8_t> unstuffed = byte_unstuff(buffer); // без флагов
                 FrameInfo frameTemp;
 
-                // Парсим информационное поле с новой функцией
-                // parse_information_field_with_dynamic_fcs модифицирует frameTemp.payload и frameTemp.fcs_parity_bits
-                // до применения искажений. Нам нужно исказить ДО парсинга.
-                // Поэтому, сначала парсим, потом искажаем, потом повторно применяем Хэмминг,
-                // либо парсим, получаем сырые данные, искажаем их, и уже потом применяем Хэмминг.
-
-                // Для корректной симуляции, нам нужно отделить данные до искажения.
-                // 1. Считываем заголовок и длину.
-                // 2. Считываем `payload` (length байтов).
-                // 3. Считываем `parity_bits` (остаток до флага).
-                // 4. Искажаем `payload` и/или `parity_bits`.
-                // 5. Передаем искаженные данные в `hamming_decode_with_parity_bits`.
-                // 6. Обновляем `frameTemp` полями из `DecodeHammingParityResult`.
-
                 if (unstuffed.size() >= 6) { // Min size: address(1)+control(1)+seq(1)+variant(1)+length(2)
                     size_t idx = 0;
                     uint8_t address = unstuffed[idx++];
@@ -119,7 +99,9 @@ bool receive_frame(HANDLE hComm, std::mt19937& rng) {
 
                         full_message.insert(full_message.end(), frameTemp.payload.begin(), frameTemp.payload.end());
                         any_frame = true;
-                        print_frame_info_with_hamming_status(frameTemp);
+                        if (frameTemp.had_double_error) {
+                            std::cout << "Обнаружена двойная ошибка, данные повреждены." << std::endl;
+                        }
 
                     }
                 }
@@ -136,6 +118,7 @@ bool receive_frame(HANDLE hComm, std::mt19937& rng) {
         std::cout << "Нет данных для чтения." << std::endl;
     }
     else {
+        std::cout << "Принято сообщение:" << std::endl;
         std::string message(full_message.begin(), full_message.end());
         std::cout << message << std::endl;
     }
