@@ -132,12 +132,14 @@
     <ClCompile Include="hamming.cpp" />
     <ClCompile Include="receive.cpp" />
     <ClCompile Include="send.cpp" />
+    <ClCompile Include="csma_config.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="cli.h" />
     <ClInclude Include="com_config.h" />
     <ClInclude Include="frame_config.h" />
     <ClInclude Include="hamming.h" />
+    <ClInclude Include="csma_config.h" />
     <ClInclude Include="io.h" />
     <ClInclude Include="receive.h" />
     <ClInclude Include="send.h" />

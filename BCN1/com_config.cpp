@@ -1,13 +1,19 @@
-#include <wtypes.h>
+#include "com_config.h"
 #include <iostream>
-#include <vector>
-#include "io.h"
+#define NOMINMAX
 
 HANDLE open_com_port(LPCWSTR COM_PORT) {
-    HANDLE hComm = CreateFile(COM_PORT, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    HANDLE hComm = CreateFile(
+        COM_PORT,
+        GENERIC_READ | GENERIC_WRITE,
+        0,
+        NULL,
+        OPEN_EXISTING,
+        0,
+        NULL
+    );
     if (hComm == INVALID_HANDLE_VALUE) {
-        std::cout << "Не удалось открыть порт " << WCharToString(COM_PORT) << "\n";
-        print_last_error();
+        std::cout << "Ошибка открытия COM-порта.\n";
         return NULL;
     }
     return hComm;
@@ -16,47 +22,62 @@ HANDLE open_com_port(LPCWSTR COM_PORT) {
 void configure_com_port(HANDLE hComm, DWORD baudRate) {
     DCB dcbSerialParams = { 0 };
     dcbSerialParams.DCBlength = sizeof(dcbSerialParams);
-    if (!GetCommState(hComm, &dcbSerialParams)) { print_last_error(); return; }
+    if (!GetCommState(hComm, &dcbSerialParams)) {
+        std::cout << "Ошибка получения состояния COM-порта.\n";
+        return;
+    }
     dcbSerialParams.BaudRate = baudRate;
     dcbSerialParams.ByteSize = 8;
     dcbSerialParams.StopBits = ONESTOPBIT;
     dcbSerialParams.Parity = NOPARITY;
-    if (!SetCommState(hComm, &dcbSerialParams)) { print_last_error(); return; }
+    if (!SetCommState(hComm, &dcbSerialParams)) {
+        std::cout << "Ошибка установки состояния COM-порта.\n";
+        return;
+    }
+
+    // --- ДОБАВЛЕН БЛОК УСТАНОВКИ ТАЙМАУТОВ ---
+    // Это критически важно для CSMA/CD, чтобы чтение не блокировало программу.
     COMMTIMEOUTS timeouts = { 0 };
-    timeouts.ReadIntervalTimeout = 1000;
-    timeouts.ReadTotalTimeoutConstant = 1000;
-    timeouts.ReadTotalTimeoutMultiplier = 100;
-    timeouts.WriteTotalTimeoutConstant = 50;
+    timeouts.ReadIntervalTimeout = 50;
+    timeouts.ReadTotalTimeoutMultiplier = 10;
+    timeouts.ReadTotalTimeoutConstant = 50; // Ждем ответа не более 50 мс
     timeouts.WriteTotalTimeoutMultiplier = 10;
-    SetCommTimeouts(hComm, &timeouts);
+    timeouts.WriteTotalTimeoutConstant = 50;
+
+    if (!SetCommTimeouts(hComm, &timeouts)) {
+        std::cout << "Ошибка установки таймаутов COM-порта.\n";
+    }
 }
 
 bool write_to_port(HANDLE hComm, const std::vector<uint8_t>& data) {
     DWORD bytesWritten;
-    if (!WriteFile(hComm, data.data(), (DWORD)data.size(), &bytesWritten, NULL) || bytesWritten != data.size()) {
+    if (!WriteFile(hComm, data.data(), data.size(), &bytesWritten, NULL)) {
         return false;
     }
-    return true;
+    return bytesWritten == data.size();
 }
 
-// чтение из COM (байтовое чтение)
 bool read_from_port(HANDLE hComm, std::vector<uint8_t>& buffer) {
+    // Будем читать по одному байту, чтобы не ждать заполнения буфера
+    char byte_char;
     DWORD bytesRead;
-    char temp[512] = { 0 };
+    buffer.clear();
 
-    COMSTAT com_stat;
-    DWORD dw_error;
-    if (!ClearCommError(hComm, &dw_error, &com_stat)) {
-        return false;
-    }
+    // Читаем первый байт
+    if (ReadFile(hComm, &byte_char, 1, &bytesRead, NULL) && bytesRead > 0) {
+        buffer.push_back(static_cast<uint8_t>(byte_char));
 
-    if (com_stat.cbInQue == 0) return false;
-
-    DWORD toRead = com_stat.cbInQue;
-    if (toRead > sizeof(temp)) toRead = sizeof(temp);
-
-    if (ReadFile(hComm, temp, toRead, &bytesRead, NULL)) {
-        buffer.assign((uint8_t*)temp, (uint8_t*)temp + bytesRead);
+        // Проверяем, есть ли еще данные в буфере порта, и читаем их
+        DWORD errors;
+        COMSTAT stat;
+        if (ClearCommError(hComm, &errors, &stat) && stat.cbInQue > 0) {
+            std::vector<char> temp_buf(stat.cbInQue);
+            if (ReadFile(hComm, temp_buf.data(), stat.cbInQue, &bytesRead, NULL)) {
+                for (DWORD i = 0; i < bytesRead; ++i) {
+                    buffer.push_back(static_cast<uint8_t>(temp_buf[i]));
+                }
+            }
+        }
         return true;
     }
     return false;

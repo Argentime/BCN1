@@ -1,19 +1,37 @@
+#include "cli.h"
 #include "frame_config.h"
-#include <iostream>
-#include <sstream>
 #include "io.h"
+#include <iostream>
 #include <iomanip>
+#include <mutex>
+
+// Подключаем глобальный мьютекс
+extern std::mutex g_cout_mutex;
 
 DWORD select_baud_rate() {
+    // Весь вывод защищен мьютексом
+    std::lock_guard<std::mutex> lock(g_cout_mutex);
+
     int choice;
     DWORD baudRates[] = { CBR_110, CBR_300, CBR_600, CBR_1200, CBR_2400, CBR_4800, CBR_9600, CBR_14400, CBR_19200, CBR_38400, CBR_57600, CBR_115200 };
     int numRates = sizeof(baudRates) / sizeof(baudRates[0]);
     std::cout << "Выберите скорость передачи (Baud Rate):\n";
     for (int i = 0; i < numRates; i++) std::cout << i + 1 << " - " << baudRates[i] << std::endl;
+
+    std::string input;
     std::cout << "Введите номер: ";
-    std::cin >> choice;
-    while ((getchar()) != '\n');
-    if (choice >= 1 && choice <= numRates) return baudRates[choice - 1];
+    // Чтение не блокирует другие потоки, но вывод должен быть атомарным
+    // Для простоты, оставим так, но в сложных GUI это делается асинхронно
+    std::cin >> input;
+  
+    try {
+        choice = std::stoi(input);
+        if (choice >= 1 && choice <= numRates) return baudRates[choice - 1];
+    }
+    catch (...) {
+        // Игнорируем ошибку
+    }
+
     std::cout << "Неверный выбор. Устанавливается 9600\n";
     return CBR_9600;
 }
@@ -43,7 +61,6 @@ void print_frame_info(const FrameInfo& frame) {
     std::cout << "Управление: "; print_byte_and_advance(i); std::cout << "\n";
     std::cout << "Счётчик: "; print_byte_and_advance(i); std::cout << "\n";
     std::cout << "Вариант: "; print_byte_and_advance(i); std::cout << "\n";
-    i += 2;
 
     // Данные (payload)
     std::cout << "Данные (" << frame.payload.size() << " байт): ";

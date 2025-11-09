@@ -5,4 +5,4 @@
 
 void print_frame_info(const FrameInfo& frame);
 DWORD select_baud_rate();
-void print_frame_info_with_hamming_status(const FrameInfo& frame);
+void print_frame_info(const FrameInfo& frame);
