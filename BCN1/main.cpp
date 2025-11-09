@@ -48,7 +48,7 @@ int main() {
 
     configure_com_port(hComm1, baudRate);
     configure_com_port(hComm2, baudRate);
-    std::cout << "Порты настроены. Скорость: " << baudRate << std::endl;
+    std::cout << "Порты сконфигурированны. Скорость: " << baudRate << std::endl;
 
     std::string message;
     std::string input;

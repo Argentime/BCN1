@@ -43,10 +43,10 @@ void print_frame_info(const FrameInfo& frame) {
     std::cout << "Управление: "; print_byte_and_advance(i); std::cout << "\n";
     std::cout << "Счётчик: "; print_byte_and_advance(i); std::cout << "\n";
     std::cout << "Вариант: "; print_byte_and_advance(i); std::cout << "\n";
-    std::cout << "Длинна поля данных: "; print_byte_and_advance(i); std::cout << " "; print_byte_and_advance(i); std::cout << "\n";
+    i += 2;
 
     // Данные (payload)
-    std::cout << "Данные (payload, " << frame.payload.size() << " байт): ";
+    std::cout << "Данные (" << frame.payload.size() << " байт): ";
     size_t payload_bytes_read = 0;
     size_t start_of_payload_in_raw = i; // Запоминаем, где начинается payload в raw_frame
     for (size_t k = 0; k < frame.payload.size(); ++k) {
@@ -56,7 +56,7 @@ void print_frame_info(const FrameInfo& frame) {
     std::cout << "\n";
 
     // FCS (Hamming parity bits)
-    std::cout << "FCS (Hamming parity bits, " << frame.fcs_parity_bits.size() << " байт): ";
+    std::cout << "FCS (Последовательность проверки кадра, " << frame.fcs_parity_bits.size() << " байт): ";
     size_t fcs_start_in_raw = i; // Запоминаем, где начинается FCS в raw_frame
     for (size_t k = 0; k < frame.fcs_parity_bits.size(); ++k) {
         print_byte_and_advance(i);

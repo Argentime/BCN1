@@ -11,6 +11,7 @@ bool send_string_as_frame(FrameInfo& last_sent_frame, HANDLE hComm, const std::s
     uint8_t address = 0x01, uint8_t control = 0x00, uint8_t variant = 0x00) {
     const size_t MAX_PAYLOAD_SIZE = 64; // оригинальный размер payload в байтах
     size_t offset = 0;
+    sequence = 0;
     bool any_sent = false;
 
     while (offset < message.size()) {
