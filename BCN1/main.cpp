@@ -15,6 +15,7 @@
 #include <mutex>
 #include <atomic>
 #include <chrono>
+#include <queue> // Для очереди сообщений
 
 #include "com_config.h"
 #include "csma_config.h"
@@ -23,12 +24,16 @@
 #include "cli.h"
 
 // --- Глобальные переменные ---
-HANDLE hComm1; // Передатчик
-HANDLE hComm2; // Приёмник-эмулятор
+HANDLE hComm1;
+HANDLE hComm2;
 FrameInfo last_sent_frame;
 
 std::mutex g_cout_mutex;
 std::atomic<bool> g_stop_thread(false);
+
+// Очередь для принятых сообщений
+std::queue<std::string> g_received_messages;
+std::mutex g_message_queue_mutex;
 
 #define COM_PORT1 L"COM2"
 #define COM_PORT2 L"COM4"
@@ -58,8 +63,7 @@ int main() {
     configure_com_port(hComm1, baudRate);
     configure_com_port(hComm2, baudRate);
     std::cout << "Порты настроены. Скорость: " << baudRate << std::endl;
-    
-    // --- ЗАПУСК ФОНОВОГО ПОТОКА-ПРИЁМНИКА ---
+
     std::thread receiver_thread(receiver_emulator_thread_func, hComm2, std::ref(rng));
     {
         std::lock_guard<std::mutex> lock(g_cout_mutex);
@@ -77,9 +81,11 @@ int main() {
             std::lock_guard<std::mutex> lock(g_cout_mutex);
             std::cout << "\nМеню:\n";
             std::cout << "1 - Отправить сообщение\n";
-            std::cout << "2 - Посмотреть статистику коллизий\n";
-            std::cout << "3 - Установить скорость передачи\n";
-            std::cout << "4 - Просмотр последнего отправленного кадра\n";
+            std::cout << "2 - Прочитать новые сообщения\n";
+            std::cout << "3 - Вкл/Выкл подробный лог коллизий (сейчас: " << (g_dynamic_info_enabled ? "ВКЛ" : "ВЫКЛ") << ")\n";
+            std::cout << "4 - Посмотреть статистику коллизий\n";
+            std::cout << "5 - Установить скорость передачи\n";
+            std::cout << "6 - Просмотр последнего отправленного кадра\n";
             std::cout << "0 - Выход из программы\n";
             std::cout << "Ваш выбор: ";
         }
@@ -87,13 +93,11 @@ int main() {
         std::getline(std::cin, input);
 
         try {
-            if (!input.empty()) {
-                choice = std::stoi(input);
-            } else {
-                choice = -1; // Пустой ввод
-            }
-        } catch (...) {
-            choice = -1; // Нечисловой ввод
+            if (!input.empty()) choice = std::stoi(input);
+            else choice = -1;
+        }
+        catch (...) {
+            choice = -1;
         }
 
         switch (choice) {
@@ -107,12 +111,33 @@ int main() {
             break;
         }
         case 2: {
-            std::lock_guard<std::mutex> lock(g_cout_mutex);
-            std::cout << "--- Статистика ---\n";
-            std::cout << "Обнаружено коллизий: " << g_collision_count << std::endl;
+            std::lock_guard<std::mutex> lock(g_message_queue_mutex);
+            std::lock_guard<std::mutex> cout_lock(g_cout_mutex);
+            if (g_received_messages.empty()) {
+                std::cout << "Нет новых сообщений.\n";
+            }
+            else {
+                std::cout << "--- Новые сообщения ---\n";
+                while (!g_received_messages.empty()) {
+                    std::cout << g_received_messages.front() << std::endl;
+                    g_received_messages.pop();
+                }
+            }
             break;
         }
         case 3: {
+            g_dynamic_info_enabled = !g_dynamic_info_enabled;
+            std::lock_guard<std::mutex> lock(g_cout_mutex);
+            std::cout << "Подробный лог теперь " << (g_dynamic_info_enabled ? "ВКЛЮЧЕН" : "ВЫКЛЮЧЕН") << ".\n";
+            break;
+        }
+        case 4: {
+            std::lock_guard<std::mutex> lock(g_cout_mutex);
+            std::cout << "--- Статистика ---\n";
+            std::cout << "Обнаружено коллизий с момента запуска: " << g_collision_count << std::endl;
+            break;
+        }
+        case 5: {
             baudRate = select_baud_rate();
             configure_com_port(hComm1, baudRate);
             configure_com_port(hComm2, baudRate);
@@ -120,13 +145,11 @@ int main() {
             std::cout << "Скорость портов обновлена до " << baudRate << std::endl;
             break;
         }
-        case 4: {
+        case 6: {
             print_frame_info(last_sent_frame);
             break;
         }
-        case 0: {
-            break; // Выходим из switch, цикл while завершится
-        }
+        case 0: break;
         default: {
             std::lock_guard<std::mutex> lock(g_cout_mutex);
             std::cout << "Неверный выбор.\n";

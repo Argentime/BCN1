@@ -9,14 +9,15 @@
 #define JAM_SIGNAL 0xAA // Байт для jam-последовательности
 
 // --- Параметры алгоритма CSMA/CD ---
-#define MAX_ATTEMPTS 16      // Максимальное количество попыток передачи
-#define SLOT_TIME_MS 50      // Время слота в миллисекундах (для расчета задержки)
-#define JAM_SIGNAL_LENGTH 4  // Длина jam-последовательности в байтах
-#define MAX_BACKOFF_DELAY_MS 2000 // Максимальная задержка 2 секунды
+#define MAX_ATTEMPTS 16
+#define SLOT_TIME_MS 50
+#define JAM_SIGNAL_LENGTH 4
+#define MAX_BACKOFF_DELAY_MS 2000
 
 // --- Вероятности для эмуляции ---
-#define PROBABILITY_CHANNEL_BUSY 0.75 // 75%
-#define PROBABILITY_COLLISION 0.25    // 25%
+#define PROBABILITY_CHANNEL_BUSY 0.75
+#define PROBABILITY_COLLISION 0.25
 
-// Глобальный счетчик коллизий для отображения в интерфейсе
+// --- Глобальные переменные ---
 extern std::atomic<int> g_collision_count;
+extern std::atomic<bool> g_dynamic_info_enabled; // Флаг для отображения лога

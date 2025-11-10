@@ -9,17 +9,16 @@
 #include <mutex>
 #include <thread>
 #include <chrono>
+#include <queue>
 
 // Подключаем внешние глобальные переменные
 extern std::mutex g_cout_mutex;
 extern std::atomic<bool> g_stop_thread;
+extern std::atomic<bool> g_dynamic_info_enabled;
 
-// Прототип функции печати из cli.cpp
-void print_frame_info_with_hamming_status(
-    const FrameInfo& frame,
-    const std::vector<uint8_t>& received_payload,
-    const std::vector<uint8_t>& received_parity_bits
-);
+// Очередь для принятых сообщений и её мьютекс
+extern std::queue<std::string> g_received_messages;
+extern std::mutex g_message_queue_mutex;
 
 void receiver_emulator_thread_func(HANDLE hComm, std::mt19937& rng) {
     std::vector<uint8_t> buffer;
@@ -38,16 +37,16 @@ void receiver_emulator_thread_func(HANDLE hComm, std::mt19937& rng) {
         if (!in_frame_reception) {
             if (received_byte == ENQ) {
                 if (dist(rng) < PROBABILITY_CHANNEL_BUSY) {
-                    {
+                    if (g_dynamic_info_enabled) {
                         std::lock_guard<std::mutex> lock(g_cout_mutex);
-                        std::cout << "[ЭМУЛЯТОР] Канал занят. Отправка NAK.\n";
+                        std::cout << "[КАНАЛ] Среда занята (эмуляция).\n";
                     }
                     write_to_port(hComm, { NAK });
                 }
                 else {
-                    {
+                    if (g_dynamic_info_enabled) {
                         std::lock_guard<std::mutex> lock(g_cout_mutex);
-                        std::cout << "[ЭМУЛЯТОР] Канал свободен. Отправка ACK.\n";
+                        std::cout << "[КАНАЛ] Среда свободна, передача разрешена.\n";
                     }
                     write_to_port(hComm, { ACK });
                     in_frame_reception = true;
@@ -57,9 +56,9 @@ void receiver_emulator_thread_func(HANDLE hComm, std::mt19937& rng) {
         }
         else {
             if (received_byte == JAM_SIGNAL) {
-                {
+                if (g_dynamic_info_enabled) {
                     std::lock_guard<std::mutex> lock(g_cout_mutex);
-                    std::cout << "[ЭМУЛЯТОР] Получен Jam-сигнал. Сброс.\n";
+                    std::cout << "[КАНАЛ] Получен Jam-сигнал, прием прерван.\n";
                 }
                 in_frame_reception = false;
                 buffer.clear();
@@ -67,9 +66,9 @@ void receiver_emulator_thread_func(HANDLE hComm, std::mt19937& rng) {
             }
 
             if (dist(rng) < PROBABILITY_COLLISION) {
-                {
+                if (g_dynamic_info_enabled) {
                     std::lock_guard<std::mutex> lock(g_cout_mutex);
-                    std::cout << "[ЭМУЛЯТОР] Коллизия! Отправка COL.\n";
+                    std::cout << "[КАНАЛ] Коллизия в среде (эмуляция)!\n";
                 }
                 write_to_port(hComm, { COL });
                 in_frame_reception = false;
@@ -79,24 +78,26 @@ void receiver_emulator_thread_func(HANDLE hComm, std::mt19937& rng) {
                 buffer.push_back(received_byte);
 
                 if (received_byte == FLAG && buffer.size() > 1 && buffer[0] == FLAG) {
-                    {
+                    if (g_dynamic_info_enabled) {
                         std::lock_guard<std::mutex> lock(g_cout_mutex);
-                        std::cout << "\n[ПРИЁМНИК] Получен полный кадр. Декодирование...\n";
+                        std::cout << "[ПРИЁМНИК] Получен полный кадр. Декодирование...\n";
                     }
 
                     std::vector<uint8_t> unstuffed = byte_unstuff(buffer);
                     FrameInfo frameTemp;
                     if (parse_information_field_with_dynamic_fcs(unstuffed, frameTemp)) {
-                        std::lock_guard<std::mutex> lock(g_cout_mutex);
-                        std::cout << "--- ПРИНЯТО СООБЩЕНИЕ ---\n";
                         std::string msg(frameTemp.payload.begin(), frameTemp.payload.end());
-                        std::cout << "Сообщение: \"" << msg << "\"\n";
-                        std::cout << "Статус: " << (frameTemp.valid ? "Валидно" : "Невалидно")
-                            << ", одиночных ошибок: " << (frameTemp.had_single_error ? "Да" : "Нет")
-                            << ", двойных ошибок: " << (frameTemp.had_double_error ? "Да" : "Нет") << "\n";
-                        std::cout << "---------------------------\n";
+
+                        // Помещаем сообщение в очередь
+                        std::lock_guard<std::mutex> lock(g_message_queue_mutex);
+                        g_received_messages.push(msg);
+
+                        if (g_dynamic_info_enabled) {
+                            std::lock_guard<std::mutex> cout_lock(g_cout_mutex);
+                            std::cout << "[ПРИЁМНИК] Сообщение \"" << msg << "\" принято и помещено в очередь.\n";
+                        }
                     }
-                    else {
+                    else if (g_dynamic_info_enabled) {
                         std::lock_guard<std::mutex> lock(g_cout_mutex);
                         std::cout << "[ПРИЁМНИК] Ошибка разбора кадра.\n";
                     }
