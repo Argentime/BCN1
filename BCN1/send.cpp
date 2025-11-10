@@ -82,7 +82,18 @@ bool send_with_csma_cd(FrameInfo& last_sent_frame, HANDLE hComm, const std::stri
         if (collision_detected) {
             n++;
             send_jam_signal(hComm);
-            DWORD backoff_delay = rand() % (MAX_BACKOFF_DELAY_MS + 1);
+            int k = std::min(n, 10);
+
+            // Вычисляем верхнюю границу для случайного числа: 2^k.
+            int max_rand_range = static_cast<int>(pow(2, k));
+
+            // Генерируем случайное число 'r' в диапазоне [0, 2^k - 1].
+            if (max_rand_range == 0) max_rand_range = 1;
+            int r = rand() % max_rand_range;
+
+            DWORD backoff_delay = r * SLOT_TIME_MS;
+
+            backoff_delay = std::min(backoff_delay, (DWORD)MAX_BACKOFF_DELAY_MS);
             if (g_dynamic_info_enabled) {
                 std::lock_guard<std::mutex> lock(g_cout_mutex);
                 std::cout << "[ПЕРЕДАТЧИК] Обнаружена коллизия. Повторная попытка через " << backoff_delay << " мс.\n";
