@@ -55,8 +55,8 @@ int main() {
     if (hComm1 == NULL || hComm2 == NULL) {
         if (hComm1 != NULL) CloseHandle(hComm1);
         if (hComm2 != NULL) CloseHandle(hComm2);
-        std::cout << "Не удалось открыть один или оба COM-порта.\n";
-        system("pause");
+        std::cout << "Не удалось открыть один или оба COM-порта. Выход из программы... Нажмите Enter для продолжения\n";
+        _fgetchar();
         return 1;
     }
 
@@ -164,7 +164,7 @@ int main() {
     CloseHandle(hComm1);
     CloseHandle(hComm2);
 
-    std::cout << "Выход из программы... ";
-    system("pause");
+    std::cout << "Выход из программы... Нажмите Enter для продолжения";
+    _fgetchar();
     return 0;
 }
