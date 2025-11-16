@@ -9,7 +9,7 @@
 #define JAM_SIGNAL 0xAA // Байт для jam-последовательности
 
 // --- Параметры алгоритма CSMA/CD ---
-#define MAX_ATTEMPTS 20
+#define MAX_ATTEMPTS 16
 #define SLOT_TIME_MS 50
 #define JAM_SIGNAL_LENGTH 4
 #define MAX_BACKOFF_DELAY_MS 2000
